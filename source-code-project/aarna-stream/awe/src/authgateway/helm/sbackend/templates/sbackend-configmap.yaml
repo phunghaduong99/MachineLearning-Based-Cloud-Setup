@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sbackend-configmap
+data:
+  mongodb_host: "emco-mongo:27017"
+  gclient_id: 759444881619-7nfbbp98cergjvn98gl0gio9v0hp5opc.apps.googleusercontent.com
+  msclient_id: 5a29e6c2-bb8f-40de-8867-01eb665f2f94
+  camunda_host: "camunda:8443"
+  node_env: production
+  ms_callback_url: https://10.121.7.48:30651/auth/microsoft/callback
+  google_callback_url: https://10.121.7.48:30651/auth/google/callback
+  ui_proxy_target: http://192.168.101.232:30580
+  api_proxy_target: http://192.168.101.232:30580
+

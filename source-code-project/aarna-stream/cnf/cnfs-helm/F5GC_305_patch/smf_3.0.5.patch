@@ -1,0 +1,490 @@
+diff --git a/context/upf.go b/context/upf.go
+index 134222a..41f2ebc 100644
+--- a/context/upf.go
++++ b/context/upf.go
+@@ -6,6 +6,7 @@ import (
+ 	"math"
+ 	"net"
+ 	"reflect"
++	"time"
+ 	"sync"
+ 
+ 	"github.com/google/uuid"
+@@ -17,6 +18,7 @@ import (
+ 	"github.com/free5gc/pfcp/pfcpUdp"
+ 	"github.com/free5gc/smf/factory"
+ 	"github.com/free5gc/smf/logger"
++	amf_context "github.com/free5gc/amf/context"
+ )
+ 
+ var upfPool sync.Map
+@@ -58,6 +60,9 @@ type UPF struct {
+ 	urrIDGenerator *idgenerator.IDGenerator
+ 	qerIDGenerator *idgenerator.IDGenerator
+ 	teidGenerator  *idgenerator.IDGenerator
++	PFDtimer	*amf_context.Timer
++	HeartbeatTimer	*amf_context.Timer
++	LastHeartbeatTime  time.Time
+ }
+ 
+ // UPFSelectionParams ... parameters for upf selection
+@@ -519,3 +524,96 @@ func (upf *UPF) isSupportSnssai(snssai *SNssai) bool {
+ 	}
+ 	return false
+ }
++
++// Start PFDMannagement Request timer (ablesystem)
++func (upf *UPF) StartPFDMannagementRequest(upNodeID pfcpType.NodeID,timerFunc func(upNodeID pfcpType.NodeID)) {
++     if upf.PFDtimer != nil {
++	logger.CtxLog.Debugln("### PFD Timer already started")
++	return
++     }
++     upf.StopHeartbeatRequest()
++
++     timerFunc(upNodeID)
++
++     logger.CtxLog.Infof("### PFD Timer start [%+v]",upNodeID)
++     upf.PFDtimer = amf_context.NewTimer(60 * time.Second ,9999,
++	func(expireTimes int32) {
++	    logger.CtxLog.Debugf("### PFD Timer expire [%+v]",upNodeID)
++	    timerFunc(upNodeID)
++	}, func() {
++            logger.CtxLog.Infoln("### PFD timer done [%+v]",upNodeID)
++	    upf.PFDtimer = nil
++	    upf.StartPFDMannagementRequest(upNodeID,timerFunc)
++	})
++}
++
++// Stop PFDMannagement Request timer (ablesystem)
++func (upf *UPF) StopPFDMannagementRequest() {
++     if upf.PFDtimer != nil {
++	logger.CtxLog.Infoln("### PFD timer stop")
++	upf.PFDtimer.Stop()
++     }
++     upf.PFDtimer = nil
++}
++
++
++// Start HeartbeatRequest timer (ablesystem)
++func (upf *UPF) StartHeartbeatRequest(upNodeID pfcpType.NodeID,timerFunc func(upNodeID pfcpType.NodeID)) {
++     if upf.HeartbeatTimer != nil {
++	logger.CtxLog.Debugln("### Heartbeat Timer already started")
++	return
++     }
++
++     logger.CtxLog.Infof("### Heartbeat Timer start [%+v]",upNodeID)
++
++     upf.HeartbeatTimer = amf_context.NewTimer(60 * time.Second ,999999,
++	func(expireTimes int32) {
++	    timerFunc(upNodeID)
++	}, func() {
++	    upf.StartHeartbeatRequest(upNodeID,timerFunc)
++	})
++}
++
++// Stop HeartbeatRequest timer (ablesystem)
++func (upf *UPF) StopHeartbeatRequest() {
++     if upf.HeartbeatTimer != nil {
++	logger.CtxLog.Infoln("### Heartbeat timer stop")
++	upf.HeartbeatTimer.Stop()
++     }
++     upf.HeartbeatTimer = nil
++}
++
++
++func UDPAddr2String(addr *net.UDPAddr) string {
++     return fmt.Sprintf("%s:%d",addr.IP.String(),addr.Port)
++}
++
++func UDPAddrEqul(addr1 *net.UDPAddr,addr2 *net.UDPAddr) bool {
++     if addr1 == nil || addr2 == nil {
++         return false
++     }
++
++     if addr1.IP.Equal(addr2.IP)  {
++         if addr1.Port == addr2.Port {
++	    return true
++	 }
++     }
++     return false
++}
++
++func SelectUPFByAddr(addr *net.UDPAddr) *UPF {
++	var upf *UPF
++	upf = nil
++	upfPool.Range(func(key, value interface{}) bool {
++	    upf = value.(*UPF)
++	    logger.CtxLog.Debugf("### Branching UPF Address [%+v]", upf.PFCPAddr())
++	    logger.CtxLog.Debugf("### Branching UPF Addr [%+v]", addr)
++	    if UDPAddrEqul( upf.PFCPAddr() , addr ) == true {
++	       // found !!
++	       return false
++	    }
++	    upf = nil
++	    return true
++	})
++	return upf
++}
+diff --git a/go.mod b/go.mod
+index 159f05c..e85222b 100644
+--- a/go.mod
++++ b/go.mod
+@@ -5,6 +5,7 @@ go 1.14
+ require (
+ 	github.com/antihax/optional v1.0.0
+ 	github.com/antonfisher/nested-logrus-formatter v1.3.0
++	github.com/free5gc/amf v1.3.0 // indirect
+ 	github.com/free5gc/aper v1.0.0
+ 	github.com/free5gc/flowdesc v1.0.0
+ 	github.com/free5gc/http2_util v1.0.0
+diff --git a/go.sum b/go.sum
+index 8a4d177..5907d15 100644
+--- a/go.sum
++++ b/go.sum
+@@ -31,8 +31,10 @@ cloud.google.com/go/storage v1.6.0/go.mod h1:N7U0C8pVQ/+NIKOBQyamJIeKQKkZ+mxpohl
+ cloud.google.com/go/storage v1.8.0/go.mod h1:Wv1Oy7z6Yz3DshWRJFhqM/UCfaWIRTdp0RXyy7KQOVs=
+ cloud.google.com/go/storage v1.10.0/go.mod h1:FLPqc6j+Ki4BU591ie1oL6qBQGu2Bl/tZ9ullr3+Kg0=
+ dmitri.shuralyov.com/gpu/mtl v0.0.0-20190408044501-666a987793e9/go.mod h1:H6x//7gZCb22OMCxBHrMx7a5I7Hp++hsVxbQ4BYO7hU=
++git.cs.nctu.edu.tw/calee/sctp v1.1.0/go.mod h1:NeOuBXO1iJBtldmNhkfSH8yFbnxlhI8eEJdUd7DZvws=
+ github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
+ github.com/BurntSushi/xgb v0.0.0-20160522181843-27f122750802/go.mod h1:IVnqGOEym/WlBOVXweHU+Q+/VP0lqqI8lqeDx9IjBqo=
++github.com/aead/cmac v0.0.0-20160719120800-7af84192f0b1 h1:+JkXLHME8vLJafGhOH4aoV2Iu8bR55nU6iKMVfYVLjY=
+ github.com/aead/cmac v0.0.0-20160719120800-7af84192f0b1/go.mod h1:nuudZmJhzWtx2212z+pkuy7B6nkBqa+xwNXZHL1j8cg=
+ github.com/antihax/optional v1.0.0 h1:xK2lYat7ZLaVVcIuj82J8kIro4V6kDe0AUDFboUCwcg=
+ github.com/antihax/optional v1.0.0/go.mod h1:uupD/76wgC+ih3iEmQUL+0Ugr19nfwCT1kdvxnR2qWY=
+@@ -56,10 +58,16 @@ github.com/envoyproxy/go-control-plane v0.9.1-0.20191026205805-5f8ba28d4473/go.m
+ github.com/envoyproxy/go-control-plane v0.9.4/go.mod h1:6rpuAdCZL397s3pYoYcLgu1mIlRU8Am5FuJP05cCM98=
+ github.com/envoyproxy/protoc-gen-validate v0.1.0/go.mod h1:iSmxcyjqTsJpI2R4NaDN7+kN2VEUnK/pcBlmesArF7c=
+ github.com/free5gc/CommonConsumerTestData v1.0.0/go.mod h1:zhv32NDxa/HWukKeEZV0b4uE2Yl+gBkycfp81HqUo4A=
++github.com/free5gc/UeauCommon v1.0.0 h1:ykhHNOcGpk6hLpVrGcMuKBbc+PgSmrwxCELnyFH9xKs=
++github.com/free5gc/UeauCommon v1.0.0/go.mod h1:Ly9JlJN4c1uCALizCmEha1Nu78ibQjbpQvSrt04nGfw=
++github.com/free5gc/amf v1.3.0 h1:TJeIC3Md2R6sDw7tjmwYi+4p1qcT6ff8fVM+85QB+0k=
++github.com/free5gc/amf v1.3.0/go.mod h1:rvKiesox0/VcKaXPLEqb1udczlvRMdcd7q22fcPQs80=
+ github.com/free5gc/aper v1.0.0 h1:EuKAQ2EL5wykcmaJsoIeExLwr97HhQJOiG7qvqSkjZM=
+ github.com/free5gc/aper v1.0.0/go.mod h1:L1R91VwLpAIh/kx/hOWXwgBQp3ZZflRHHKCYmfeGegU=
+ github.com/free5gc/flowdesc v1.0.0 h1:Xp4/tFWpo6+1E3o2wTqKkatJ+rPFe032iWRGsK3/RBk=
+ github.com/free5gc/flowdesc v1.0.0/go.mod h1:PGEZd/IMsTEeXB4Yaswh0YazQfM3AOhAL8cKhzAr9Ck=
++github.com/free5gc/fsm v1.0.0 h1:n4YwDx6bDdUtWLo49Z3u84dt/bOrLJjJPZX2jUM+XSQ=
++github.com/free5gc/fsm v1.0.0/go.mod h1:DGWHYWqsDJkb7ycNk9WiAe5WfbFyFTjGPEY0lfwlDg8=
+ github.com/free5gc/http2_util v1.0.0 h1:0laMypHUNizAE5zsLoeJQq0R4XrfbvsLCW4NHCPpc44=
+ github.com/free5gc/http2_util v1.0.0/go.mod h1:GN2BCD8IINjtnAKYGwe+dEeTBRFEv4lQnZblFIIhbdE=
+ github.com/free5gc/http_wrapper v1.0.0 h1:NdnDHkItXxUzoxggiQsnR9SObBdi6KmwcN+QUJs4CoQ=
+@@ -86,8 +94,10 @@ github.com/free5gc/util_3gpp v1.0.0 h1:yDuCFVlzLWKu6+vKBNG/PVAxjtrr8hPlJaTE/00hX
+ github.com/free5gc/util_3gpp v1.0.0/go.mod h1:6uI6CB6SD/yWpalo17gc5eWUVFMAIKkWDiQpkOX3+c8=
+ github.com/free5gc/version v1.0.0 h1:Kn4uOhyHT1IAgerBgWRHag4xLMDXrRsqubLeMv5Nb/w=
+ github.com/free5gc/version v1.0.0/go.mod h1:wOTwzjk7sqeysX1b/Z4x+pWBHFuZOPtQj3h+IJXSpmQ=
++github.com/gin-contrib/cors v1.3.1/go.mod h1:jjEJ4268OPZUcU7k9Pm653S7lXUGcqMADzFA61xsmDk=
+ github.com/gin-contrib/sse v0.1.0 h1:Y/yl/+YNO8GZSjAhjMsSuLt29uWRFHdHYUb5lYOV9qE=
+ github.com/gin-contrib/sse v0.1.0/go.mod h1:RHrZQHXnP2xjPF+u1gW/2HnVO7nvIa9PG3Gm+fLHvGI=
++github.com/gin-gonic/gin v1.5.0/go.mod h1:Nd6IXA8m5kNZdNEHMBd93KT+mdY3+bewLgRvmCsR2Do=
+ github.com/gin-gonic/gin v1.6.3 h1:ahKqKTFpO5KTPHxWZjEdPScmYaGtLo8Y4DMHoEsnp14=
+ github.com/gin-gonic/gin v1.6.3/go.mod h1:75u5sXoLsGZoRN5Sgbi1eraJ4GU3++wFwWzhwvtwp4M=
+ github.com/go-gl/glfw v0.0.0-20190409004039-e6da0acd62b1/go.mod h1:vR7hzQXu2zJy9AVAgeJqvqgH9Q5CA+iKCZ2gyEVpxRU=
+@@ -95,8 +105,10 @@ github.com/go-gl/glfw/v3.3/glfw v0.0.0-20191125211704-12ad95a8df72/go.mod h1:tQ2
+ github.com/go-gl/glfw/v3.3/glfw v0.0.0-20200222043503-6f7a984d4dc4/go.mod h1:tQ2UAYgL5IevRw8kRxooKSPJfGvJ9fJQFa0TUsXzTg8=
+ github.com/go-playground/assert/v2 v2.0.1 h1:MsBgLAaY856+nPRTKrp3/OZK38U/wa0CcBYNjji3q3A=
+ github.com/go-playground/assert/v2 v2.0.1/go.mod h1:VDjEfimB/XKnb+ZQfWdccd7VUvScMdVu0Titje2rxJ4=
++github.com/go-playground/locales v0.12.1/go.mod h1:IUMDtCfWo/w/mtMfIE/IG2K+Ey3ygWanZIBtBW0W2TM=
+ github.com/go-playground/locales v0.13.0 h1:HyWk6mgj5qFqCT5fjGBuRArbVDfE4hi8+e8ceBS/t7Q=
+ github.com/go-playground/locales v0.13.0/go.mod h1:taPMhCMXrRLJO55olJkUXHZBHCxTMfnGwq/HNwmWNS8=
++github.com/go-playground/universal-translator v0.16.0/go.mod h1:1AnU7NaIRDWWzGEKwgtJRd2xk99HeFyHw3yid4rvQIY=
+ github.com/go-playground/universal-translator v0.17.0 h1:icxd5fm+REJzpZx7ZfpaD876Lmtgy7VtROAbHHXk8no=
+ github.com/go-playground/universal-translator v0.17.0/go.mod h1:UkSxE5sNxxRwHyU+Scu5vgOQjsIJAF8j9muTVoKLVtA=
+ github.com/go-playground/validator/v10 v10.2.0 h1:KgJ0snyC2R9VXYN2rneOtQcw5aHQB1Vv0sFl1UcHBOY=
+@@ -161,6 +173,7 @@ github.com/h2non/parth v0.0.0-20190131123155-b4df798d6542/go.mod h1:Ow0tF8D4Kplb
+ github.com/hashicorp/golang-lru v0.5.0/go.mod h1:/m3WP610KZHVQ1SGc6re/UDhFvYD7pJ4Ao+sR/qLZy8=
+ github.com/hashicorp/golang-lru v0.5.1/go.mod h1:/m3WP610KZHVQ1SGc6re/UDhFvYD7pJ4Ao+sR/qLZy8=
+ github.com/ianlancetaylor/demangle v0.0.0-20181102032728-5e5cf60278f6/go.mod h1:aSSvb/t6k1mPoxDqO4vJh6VOCGPwU4O0C2/Eqndh1Sc=
++github.com/json-iterator/go v1.1.7/go.mod h1:KdQUCv79m/52Kvf8AW2vK1V8akMuk1QjK/uOdHXbAo4=
+ github.com/json-iterator/go v1.1.9 h1:9yzud/Ht36ygwatGx56VwCZtlI/2AD15T1X2sjSuGns=
+ github.com/json-iterator/go v1.1.9/go.mod h1:KdQUCv79m/52Kvf8AW2vK1V8akMuk1QjK/uOdHXbAo4=
+ github.com/json-iterator/go v1.1.10 h1:Kz6Cvnvv2wGdaG/V8yMvfkmNiXq9Ya2KUv4rouJJr68=
+@@ -174,8 +187,12 @@ github.com/kr/pretty v0.1.0/go.mod h1:dAy3ld7l9f0ibDNOQOHHMYYIIbhfbHSm3C4ZsoJORN
+ github.com/kr/pty v1.1.1/go.mod h1:pFQYn66WHrOpPYNljwOMqo10TkYh1fy3cYio2l3bCsQ=
+ github.com/kr/text v0.1.0 h1:45sCR5RtlFHMR4UwH9sdQ5TC8v0qDQCHnXt+kaKSTVE=
+ github.com/kr/text v0.1.0/go.mod h1:4Jbv+DJW3UT/LiOwJeYQe1efqtUx/iVham/4vfdArNI=
++github.com/leodido/go-urn v1.1.0/go.mod h1:+cyI34gQWZcE1eQU7NVgKkkzdXDQHr1dBMtdAPozLkw=
+ github.com/leodido/go-urn v1.2.0 h1:hpXL4XnriNwQ/ABnpepYM/1vCLWNDfUNts8dX3xTG6Y=
+ github.com/leodido/go-urn v1.2.0/go.mod h1:+8+nEpDfqqsY+g338gtMEUOtuK+4dEMhiQEgxpxOKII=
++github.com/leodido/go-urn v1.2.1 h1:BqpAaACuzVSgi/VLzGZIobT2z4v53pjosyNd9Yv6n/w=
++github.com/leodido/go-urn v1.2.1/go.mod h1:zt4jvISO2HfUBqxjfIshjdMTYS56ZS/qv49ictyFfxY=
++github.com/mattn/go-isatty v0.0.9/go.mod h1:YNRxwqDuOph6SZLI9vUUz6OYw3QyUt7WiY2yME+cCiQ=
+ github.com/mattn/go-isatty v0.0.12 h1:wuysRhFDzyxgEmMf5xjvJ2M9dZoWAXNNr5LSBS7uHXY=
+ github.com/mattn/go-isatty v0.0.12/go.mod h1:cbi8OIDigv2wuxKPP5vlRcQ1OAZbq2CE4Kysco4FUpU=
+ github.com/mitchellh/mapstructure v1.4.0 h1:7ks8ZkOP5/ujthUsT07rNv+nkLXCQWKNHuwzOAesEks=
+@@ -323,6 +340,7 @@ golang.org/x/sys v0.0.0-20190507160741-ecd444e8653b/go.mod h1:h1NjWce9XRLGQEsW7w
+ golang.org/x/sys v0.0.0-20190606165138-5da285871e9c/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
+ golang.org/x/sys v0.0.0-20190624142023-c5567b49c5d0/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
+ golang.org/x/sys v0.0.0-20190726091711-fc99dfbffb4e/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
++golang.org/x/sys v0.0.0-20190813064441-fde4db37ae7a/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
+ golang.org/x/sys v0.0.0-20191001151750-bb3f8db39f24/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
+ golang.org/x/sys v0.0.0-20191026070338-33540a1f6037/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
+ golang.org/x/sys v0.0.0-20191204072324-ce4227a45e2e/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
+@@ -346,6 +364,8 @@ golang.org/x/sys v0.0.0-20201119102817-f84b799fce68/go.mod h1:h1NjWce9XRLGQEsW7w
+ golang.org/x/sys v0.0.0-20201130171929-760e229fe7c5/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
+ golang.org/x/sys v0.0.0-20201211090839-8ad439b19e0f h1:QdHQnPce6K4XQewki9WNbG5KOROuDzqO3NaYjI1cXJ0=
+ golang.org/x/sys v0.0.0-20201211090839-8ad439b19e0f/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
++golang.org/x/sys v0.0.0-20201214210602-f9fddec55a1e h1:AyodaIpKjppX+cBfTASF2E1US3H2JFBj920Ot3rtDjs=
++golang.org/x/sys v0.0.0-20201214210602-f9fddec55a1e/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
+ golang.org/x/term v0.0.0-20201117132131-f5c789dd3221/go.mod h1:Nr5EML6q2oocZ2LXRh80K7BxOlk5/8JxuGnuhpl+muw=
+ golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1/go.mod h1:bj7SfCRtBDWHUb9snDiAeCFNEtKQo2Wmx5Cou7ajbmo=
+ golang.org/x/text v0.0.0-20170915032832-14c0d48ead0c/go.mod h1:NqM8EUOU14njkJ3fqMW+pc6Ldnwhi/IjpwHt7yyuwOQ=
+@@ -485,6 +505,8 @@ gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8
+ gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127 h1:qIbj1fsPNlZgppZ+VLlY7N33q108Sa+fhmuc+sWQYwY=
+ gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
+ gopkg.in/errgo.v2 v2.1.0/go.mod h1:hNsd1EY+bozCKY1Ytp96fpM3vjJbqLJn88ws8XvfDNI=
++gopkg.in/go-playground/assert.v1 v1.2.1/go.mod h1:9RXL0bg/zibRAgZUYszZSwO/z8Y/a8bDuhia5mkpMnE=
++gopkg.in/go-playground/validator.v9 v9.29.1/go.mod h1:+c9/zcJMFNgbLvly1L1V+PpxWdVbfP1avr/N00E2vyQ=
+ gopkg.in/h2non/gentleman.v1 v1.0.4/go.mod h1:JYuHVdFzS4MKOXe0o+chKJ4hCe6tqKKw9XH9YP6WFrg=
+ gopkg.in/h2non/gock.v1 v1.0.16 h1:F11k+OafeuFENsjei5t2vMTSTs9L62AdyTe4E1cgdG8=
+ gopkg.in/h2non/gock.v1 v1.0.16/go.mod h1:XVuDAssexPLwgxCLMvDTWNU5eqklsydR6I5phZ9oPB8=
+diff --git a/pfcp/handler/handler.go b/pfcp/handler/handler.go
+index e444bca..4647157 100644
+--- a/pfcp/handler/handler.go
++++ b/pfcp/handler/handler.go
+@@ -3,7 +3,8 @@ package handler
+ import (
+ 	"context"
+ 	"fmt"
+-
++	"net"
++	"time"
+ 	"github.com/free5gc/openapi/models"
+ 	"github.com/free5gc/pfcp"
+ 	"github.com/free5gc/pfcp/pfcpType"
+@@ -20,17 +21,44 @@ func HandlePfcpHeartbeatRequest(msg *pfcpUdp.Message) {
+ }
+ 
+ func HandlePfcpHeartbeatResponse(msg *pfcpUdp.Message) {
+-	logger.PfcpLog.Warnf("PFCP Heartbeat Response handling is not implemented")
+-}
++	logger.PfcpLog.Debugf("### PFCP Heartbeat Response handling")
++
++	remote := msg.RemoteAddr
++	upf := smf_context.SelectUPFByAddr(remote)
++	if upf == nil {
++		logger.PfcpLog.Errorf("### can't find UPF[%s]", UDPAddr2String(remote))
++		return
++	}
++
++	logger.PfcpLog.Debugf("### PFCP Heartbeat Response handling [%v]",upf.NodeID)
++	upf.LastHeartbeatTime = time.Now()
++ }
++
+ 
+ func HandlePfcpPfdManagementRequest(msg *pfcpUdp.Message) {
+ 	logger.PfcpLog.Warnf("PFCP PFD Management Request handling is not implemented")
+ }
+ 
+-func HandlePfcpPfdManagementResponse(msg *pfcpUdp.Message) {
+-	logger.PfcpLog.Warnf("PFCP PFD Management Response handling is not implemented")
++func UDPAddr2String(addr *net.UDPAddr) string {
++    return fmt.Sprintf("%s:%d",addr.IP.String(),addr.Port)
+ }
+ 
++func HandlePfcpPfdManagementResponse(msg *pfcpUdp.Message) {
++	logger.PfcpLog.Debugf("### PFCP PFD Management Response handling")
++
++	remote := msg.RemoteAddr
++	upf := smf_context.SelectUPFByAddr(remote)
++	if upf == nil {
++		logger.PfcpLog.Errorf("### can't find UPF[%s]", UDPAddr2String(remote))
++		return
++	}
++
++	if upf.UPFStatus != smf_context.AssociatedSetUpSuccess {
++		logger.PfcpLog.Debugf("### Send PfcpAssociationSetupRequest!!")
++		pfcp_message.SendPfcpAssociationSetupRequest(upf.NodeID)
++	}
++ }
++
+ func HandlePfcpAssociationSetupRequest(msg *pfcpUdp.Message) {
+ 	req := msg.PfcpMessage.Body.(pfcp.PFCPAssociationSetupRequest)
+ 
+@@ -83,7 +111,37 @@ func HandlePfcpAssociationSetupResponse(msg *pfcpUdp.Message) {
+ 				upf.NodeID.ResolveNodeIdToIp().String(), upf.UPIPInfo.NetworkInstance)
+ 		} else {
+ 			logger.PfcpLog.Errorln("pfcp association setup response has no UserPlane IP Resource Information")
+-		}
++	}
++
++	// stop PFDMannagementRequest timer (ablesystem)
++		upf.StopPFDMannagementRequest()
++
++		// start Heartbeat
++		upf.LastHeartbeatTime = time.Unix(0,0)
++
++		upf.StartHeartbeatRequest(upf.NodeID,func(upNodeID pfcpType.NodeID) {
++
++			// Hearbeat timeout check
++			if upf.LastHeartbeatTime.Equal(time.Unix(0,0)) != true {
++
++			    estab := time.Since(upf.LastHeartbeatTime).Seconds()
++			    logger.PfcpLog.Infof("### Heartbeat check UPF[%v] %vs",nodeID.ResolveNodeIdToIp().String(),estab)
++			    if estab > (60*2) {
++				logger.PfcpLog.Errorf("### Heartbeat Timeout!!")
++				upf.StopHeartbeatRequest()
++
++				// set NotAssociated
++				upf.UPFStatus = smf_context.NotAssociated
++
++				upf.StartPFDMannagementRequest(upf.NodeID,func(upNodeID pfcpType.NodeID) {
++		                       pfcp_message.SendPFDManagementRequest(upNodeID)
++				})
++				return
++			    }
++			}
++
++			pfcp_message.SendHeartbeatRequest(upf.NodeID)
++		})
+ 	}
+ }
+ 
+@@ -103,6 +161,9 @@ func HandlePfcpAssociationReleaseRequest(msg *pfcpUdp.Message) {
+ 
+ 	if upf != nil {
+ 		smf_context.RemoveUPFNodeByNodeID(*pfcpMsg.NodeID)
++		upf.StartPFDMannagementRequest(*pfcpMsg.NodeID,func(upNodeID pfcpType.NodeID) {
++	           pfcp_message.SendPFDManagementRequest(upNodeID)
++		})
+ 		cause.CauseValue = pfcpType.CauseRequestAccepted
+ 	} else {
+ 		cause.CauseValue = pfcpType.CauseNoEstablishedPfcpAssociation
+@@ -116,6 +177,13 @@ func HandlePfcpAssociationReleaseResponse(msg *pfcpUdp.Message) {
+ 
+ 	if pfcpMsg.Cause.CauseValue == pfcpType.CauseRequestAccepted {
+ 		smf_context.RemoveUPFNodeByNodeID(*pfcpMsg.NodeID)
++		// ablesystem
++		upf := smf_context.RetrieveUPFNodeByNodeID(*pfcpMsg.NodeID)
++		if upf != nil {
++			upf.StartPFDMannagementRequest(*pfcpMsg.NodeID,func(upNodeID pfcpType.NodeID) {
++	        	pfcp_message.SendPFDManagementRequest(upNodeID)
++			})
++		}
+ 	}
+ }
+ 
+diff --git a/pfcp/message/build.go b/pfcp/message/build.go
+index ab5dc58..081e852 100644
+--- a/pfcp/message/build.go
++++ b/pfcp/message/build.go
+@@ -475,3 +475,14 @@ func BuildPfcpSessionReportResponse(cause pfcpType.Cause) (pfcp.PFCPSessionRepor
+ 
+ 	return msg, nil
+ }
++
++func BuildPfcpPFDManagementRequest() (pfcp.PFCPPFDManagementRequest, error) {
++	msg := pfcp.PFCPPFDManagementRequest{}
++
++//	msg.ApplicationIDsPFDs = 0
++
++	return msg, nil
++}
++
++
++
+diff --git a/pfcp/message/send.go b/pfcp/message/send.go
+index 0234842..ef0b16c 100644
+--- a/pfcp/message/send.go
++++ b/pfcp/message/send.go
+@@ -19,6 +19,7 @@ func getSeqNumber() uint32 {
+ }
+ 
+ func SendPfcpAssociationSetupRequest(upNodeID pfcpType.NodeID) {
++	logger.PfcpLog.Debugf("### SendPfcpAssociationSetupRequest: %+v", upNodeID.ResolveNodeIdToIp())
+ 	pfcpMsg, err := BuildPfcpAssociationSetupRequest()
+ 	if err != nil {
+ 		logger.PfcpLog.Errorf("Build PFCP Association Setup Request failed: %v", err)
+@@ -315,6 +316,36 @@ func SendPfcpSessionReportResponse(addr *net.UDPAddr, cause pfcpType.Cause, seqF
+ 	udp.SendPfcp(message, addr)
+ }
+ 
++//  send HeartbeatRequest (ablesystem)
++func SendHeartbeatRequest(upNodeID pfcpType.NodeID) {
++
++	addr := &net.UDPAddr{
++		IP:   upNodeID.ResolveNodeIdToIp(),
++		Port: pfcpUdp.PFCP_PORT,
++	}
++        logger.PfcpLog.Debugf("### Send HeartbeatRequest: %s", addr.IP.String())
++
++	pfcpMsg := pfcp.HeartbeatRequest{
++		RecoveryTimeStamp: &pfcpType.RecoveryTimeStamp{
++			RecoveryTimeStamp: udp.ServerStartTime,
++		},
++	}
++
++	message := pfcp.Message{
++		Header: pfcp.Header{
++			Version:        pfcp.PfcpVersion,
++			MP:             0,
++			S:              pfcp.SEID_NOT_PRESENT,
++			MessageType:    pfcp.PFCP_HEARTBEAT_REQUEST,
++			SequenceNumber: getSeqNumber(),
++		},
++		Body: pfcpMsg,
++	}
++
++	udp.SendPfcp(message, addr)
++
++}
++
+ func SendHeartbeatResponse(addr *net.UDPAddr, seq uint32) {
+ 	pfcpMsg := pfcp.HeartbeatResponse{
+ 		RecoveryTimeStamp: &pfcpType.RecoveryTimeStamp{
+@@ -335,3 +366,30 @@ func SendHeartbeatResponse(addr *net.UDPAddr, seq uint32) {
+ 
+ 	udp.SendPfcp(message, addr)
+ }
++
++// add send PFDManagementRequest : ablesystem
++func SendPFDManagementRequest(upNodeID pfcpType.NodeID) {
++
++	addr := &net.UDPAddr{
++		IP:   upNodeID.ResolveNodeIdToIp(),
++		Port: pfcpUdp.PFCP_PORT,
++	}
++
++        logger.PfcpLog.Debugf("### SendPFDManagementRequest: %s", addr.IP.String())
++	pfcpMsg := pfcp.PFCPPFDManagementRequest{}
++
++	message := pfcp.Message{
++		Header: pfcp.Header{
++			Version:        pfcp.PfcpVersion,
++			MP:             0,
++			S:              pfcp.SEID_NOT_PRESENT,
++			MessageType:    pfcp.PFCP_PFD_MANAGEMENT_REQUEST,
++			SequenceNumber: getSeqNumber(),
++		},
++		Body: pfcpMsg,
++	}
++
++	udp.SendPfcp(message, addr)
++}
++
++
+diff --git a/service/init.go b/service/init.go
+index 54ee415..b4da5c7 100644
+--- a/service/init.go
++++ b/service/init.go
+@@ -279,15 +279,12 @@ func (smf *SMF) Start() {
+ 		}
+ 	}
+ 	udp.Run(pfcp.Dispatch)
++        for _, upfNode := range context.SMF_Self().UserPlaneInformation.UPFs {
++	       // ablesystem
++		upfNode.UPF.StartPFDMannagementRequest(upfNode.NodeID,func(upNodeID pfcpType.NodeID) {
++                    message.SendPFDManagementRequest(upNodeID)
++		})
+ 
+-	for _, upf := range context.SMF_Self().UserPlaneInformation.UPFs {
+-		if upf.NodeID.NodeIdType == pfcpType.NodeIdTypeFqdn {
+-			logger.AppLog.Infof("Send PFCP Association Request to UPF[%s](%s)\n", upf.NodeID.NodeIdValue,
+-				upf.NodeID.ResolveNodeIdToIp().String())
+-		} else {
+-			logger.AppLog.Infof("Send PFCP Association Request to UPF[%s]\n", upf.NodeID.ResolveNodeIdToIp().String())
+-		}
+-		message.SendPfcpAssociationSetupRequest(upf.NodeID)
+ 	}
+ 
+ 	time.Sleep(1000 * time.Millisecond)

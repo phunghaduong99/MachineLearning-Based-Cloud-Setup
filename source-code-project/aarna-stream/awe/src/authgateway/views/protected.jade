@@ -1,0 +1,10 @@
+html
+  head
+    link(rel='stylesheet', href='/stylesheets/style.css')
+  body
+  block content
+    h1 Welcome : #{user}
+    #signout
+      a(href='/logout')
+        img(src='/images/logout.svg' alt='Login With Microsoft')
+

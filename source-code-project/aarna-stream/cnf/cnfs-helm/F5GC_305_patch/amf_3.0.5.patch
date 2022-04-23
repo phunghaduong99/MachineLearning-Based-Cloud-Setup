@@ -1,0 +1,18 @@
+diff --git a/gmm/handler.go b/gmm/handler.go
+index 9cd6898..1f9aa1d 100644
+--- a/gmm/handler.go
++++ b/gmm/handler.go
+@@ -163,6 +163,13 @@ func transport5GSMMessage(ue *context.AmfUe, anType models.AccessType,
+ 				return forward5GSMMessageToSMF(ue, anType, pduSessionID, smContext, smMessage)
+ 			}
+ 		} else { // AMF does not have a PDU session routing context for the PDU session ID and the UE
++
++			if requestType == nil {
++				return errors.New("requestType is null")
++			}
++
++			ue.GmmLog.Debugf("requestType:[%v]",requestType)
++
+ 			switch requestType.GetRequestTypeValue() {
+ 			// case iii) if the AMF does not have a PDU session routing context for the PDU session ID and the UE
+ 			// and the Request type IE is included and is set to "initial request"

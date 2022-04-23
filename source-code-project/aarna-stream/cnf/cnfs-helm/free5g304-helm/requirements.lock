@@ -1,0 +1,36 @@
+dependencies:
+- name: f5gc-mongodb
+  repository: file://components/f5gc-mongodb
+  version: 0.1.0
+- name: f5gc-nrf
+  repository: file://components/f5gc-nrf
+  version: 0.1.0
+- name: f5gc-amf
+  repository: file://components/f5gc-amf
+  version: 0.1.0
+- name: f5gc-ausf
+  repository: file://components/f5gc-ausf
+  version: 0.1.0
+- name: f5gc-ausf
+  repository: file://components/f5gc-nssf
+  version: 0.1.0
+- name: f5gc-pcf
+  repository: file://components/f5gc-pcf
+  version: 0.1.0
+- name: f5gc-smf
+  repository: file://components/f5gc-smf
+  version: 0.1.0
+- name: f5gc-udm
+  repository: file://components/f5gc-udm
+  version: 0.1.0
+- name: f5gc-udr
+  repository: file://components/f5gc-udr
+  version: 0.1.0
+- name: f5gc-upf
+  repository: file://components/f5gc-upf
+  version: 0.1.0
+- name: f5gc-webui
+  repository: file://components/f5gc-webui
+  version: 0.1.0
+digest: sha256:d0d0ccbf8e98dd6cbaf34c0ec634a68d80b5f0d7affba02c959ab019386cc9b4
+generated: "2022-04-14T16:29:48.401861905+09:00"

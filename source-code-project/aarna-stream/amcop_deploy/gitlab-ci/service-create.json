@@ -1,0 +1,1 @@
+{"name":"free5gc-test","description":"","spec":{"projectName":"free5gc-tenant","appsData":[{"metadata":{"name":"free5g304-helm","description":"","filename":"free5g304-helm-0.1.0.tgz"},"profileMetadata":{"name":"free5g304-helm_profile.tar.gz","filename":"profile.tar.gz"}}]}}

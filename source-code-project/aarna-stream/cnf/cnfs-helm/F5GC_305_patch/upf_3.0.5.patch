@@ -1,0 +1,190 @@
+diff --git a/lib/pfcp/src/pfcp_xact.c b/lib/pfcp/src/pfcp_xact.c
+index 4b02ab4..cf798d3 100644
+--- a/lib/pfcp/src/pfcp_xact.c
++++ b/lib/pfcp/src/pfcp_xact.c
+@@ -333,6 +333,17 @@ Status PfcpXactUpdateTx(PfcpXact *xact, PfcpHeader *header, Bufblk *bufBlk) {
+                             GetIP(&xact->gnode->sock->remoteAddr),
+                             GetPort(&xact->gnode->sock->remoteAddr));
+                 break;
++#if 1
++            /* add ablesystem */
++	    case PFCP_XACT_UNKNOWN_STAGE:
++	         if( header->type == PFCPPFD_MANAGEMENT_RESPONSE ) {
++		     UTLT_Trace("### Receive PFCPPFD_MANAGEMENT_RESPONSE\n");
++		 }
++		 else {
++		     UTLT_Assert(0, return STATUS_ERROR, "invalid step(%d)[%d]", xact->step,header->type);
++		 }
++		 break;
++#endif
+             default:
+                 UTLT_Assert(0, return STATUS_ERROR, "invalid step(%d)", xact->step);
+         }
+@@ -508,7 +519,17 @@ Status PfcpXactUpdateRx(PfcpXact *xact, uint8_t type) {
+                             GetIP(&xact->gnode->sock->remoteAddr),
+                             GetPort(&xact->gnode->sock->remoteAddr));
+                 break;
+-
++#if 1
++            /* add ablesystem */
++	    case PFCP_XACT_UNKNOWN_STAGE:
++	         if( type == PFCPPFD_MANAGEMENT_REQUEST ) {
++		     UTLT_Trace("### Receive PFCPPFD_MANAGEMENT_REQUEST\n");
++		 }
++		 else {
++		     UTLT_Assert(0, return STATUS_ERROR, "invalid step(%d)[%d]", xact->step,type);
++		 }
++		 break;
++#endif
+             default:
+                 UTLT_Assert(0, return STATUS_ERROR, "invalid step(%d)", xact->step);
+         }
+@@ -611,6 +632,17 @@ Status PfcpXactCommit(PfcpXact *xact) {
+                     return STATUS_OK;
+                 }
+                 break;
++#if 1
++            /* add ablesystem */
++	    case PFCP_XACT_UNKNOWN_STAGE:
++	         if( type == PFCPPFD_MANAGEMENT_RESPONSE ) {
++		     UTLT_Trace("### Receive PFCPPFD_MANAGEMENT_RESPONSE\n");
++		 }
++		 else {
++		     UTLT_Assert(0, return STATUS_ERROR, "invalid step(%d)[%d]", xact->step,type);
++		 }
++		 break;
++#endif
+ 
+             default:
+                 UTLT_Assert(0, return STATUS_ERROR, "invalid step(%d)", xact->step);
+diff --git a/lib/utlt/src/utlt_buff.c b/lib/utlt/src/utlt_buff.c
+index e1e766d..a6ddd3d 100644
+--- a/lib/utlt/src/utlt_buff.c
++++ b/lib/utlt/src/utlt_buff.c
+@@ -11,7 +11,7 @@
+ 
+ #define MAX_NUM_OF_BUFBLK_POOL       256
+ 
+-#define MAX_NUM_OF_BUFBLK_POOL_64    128
++#define MAX_NUM_OF_BUFBLK_POOL_64    2048
+ #define MAX_NUM_OF_BUFBLK_POOL_128   128
+ #define MAX_NUM_OF_BUFBLK_POOL_256   128
+ #define MAX_NUM_OF_BUFBLK_POOL_512   64
+diff --git a/src/n4/n4_dispatcher.c b/src/n4/n4_dispatcher.c
+index 3c6884e..3196282 100644
+--- a/src/n4/n4_dispatcher.c
++++ b/src/n4/n4_dispatcher.c
+@@ -136,6 +136,12 @@ void UpfDispatcher(const Event *event) {
+             UpfN4HandleSessionReportResponse(session, xact,
+                                              &pfcpMessage->pFCPSessionReportResponse);
+             break;
++
++        case PFCPPFD_MANAGEMENT_REQUEST:
++            UTLT_Info("[PFCP] Handle PFCP PFD management request");
++	    UpfN4HandlePFDManagementRrequest(xact, &pfcpMessage->pFCPPFDManagementRequest);
++            break;
++
+         default:
+             UTLT_Error("No implement pfcp type: %d", pfcpMessage->header.type);
+         }
+diff --git a/src/n4/n4_pfcp_build.c b/src/n4/n4_pfcp_build.c
+index 883228c..ed0d58a 100644
+--- a/src/n4/n4_pfcp_build.c
++++ b/src/n4/n4_pfcp_build.c
+@@ -330,3 +330,30 @@ Status UpfN4BuildHeartbeatResponse(Bufblk **bufBlkPtr, uint8_t type) {
+     UTLT_Debug("PFCP heartbeat response built!");
+     return STATUS_OK;
+ }
++
++#if 1
++Status UpfN4BuildPFDManagementResponse(Bufblk **bufBlkPtr, uint8_t type) {
++    Status status;
++    PfcpMessage pfcpMessage;
++    PFCPPFDManagementResponse *response;
++    uint8_t cause;
++
++    response = &pfcpMessage.pFCPPFDManagementResponse;
++    memset(&pfcpMessage, 0, sizeof(PfcpMessage));
++    response->presence = 0;
++
++    /* cause */
++    response->cause.presence = 1;
++    cause = PFCP_CAUSE_REQUEST_ACCEPTED;
++    response->cause.value = &cause;
++    response->cause.len = 1;
++
++    pfcpMessage.header.type = type;
++    status = PfcpBuildMessage(bufBlkPtr, &pfcpMessage);
++    UTLT_Assert(status == STATUS_OK, return STATUS_ERROR, "PFCP build error");
++
++    UTLT_Debug("PFCP PFDManagementResponse built!");
++    return STATUS_OK;
++}
++#endif
++
+diff --git a/src/n4/n4_pfcp_build.h b/src/n4/n4_pfcp_build.h
+index 8ec58fa..b74da0d 100644
+--- a/src/n4/n4_pfcp_build.h
++++ b/src/n4/n4_pfcp_build.h
+@@ -28,6 +28,8 @@ Status UpfN4BuildAssociationReleaseResponse(
+ Status UpfN4BuildHeartbeatResponse (
+         Bufblk **bufBlkPtr, uint8_t type);
+ 
++Status UpfN4BuildPFDManagementResponse(Bufblk **bufBlkPtr, uint8_t type) ;
++
+ #ifdef __cplusplus
+ }
+ #endif /* __cplusplus */
+diff --git a/src/n4/n4_pfcp_handler.c b/src/n4/n4_pfcp_handler.c
+index 8aae2df..6001dd5 100644
+--- a/src/n4/n4_pfcp_handler.c
++++ b/src/n4/n4_pfcp_handler.c
+@@ -1511,3 +1511,35 @@ Status UpfN4HandleHeartbeatResponse(PfcpXact *xact,
+     UTLT_Info("[PFCP] Heartbeat Response");
+     return STATUS_OK;
+ }
++
++/*
++ *  only returns a response
++ */
++
++Status UpfN4HandlePFDManagementRrequest(PfcpXact *xact, PFCPPFDManagementRequest *request) {
++    Status status;
++    PfcpHeader header;
++    Bufblk *bufBlk = NULL;
++
++    UTLT_Info("[PFCP] PFD Management Request");
++
++    /* Send RESPONSE */
++    memset(&header, 0, sizeof(PfcpHeader));
++    header.type = PFCPPFD_MANAGEMENT_RESPONSE;
++    header.seid = 0;
++
++    status = UpfN4BuildPFDManagementResponse(&bufBlk, header.type);
++    UTLT_Assert(status == STATUS_OK, return STATUS_ERROR,
++                "N4 build error");
++
++    status = PfcpXactUpdateTx(xact, &header, bufBlk);
++    UTLT_Assert(status == STATUS_OK, return STATUS_ERROR,
++                "PfcpXactUpdateTx error");
++
++    status = PfcpXactCommit(xact);
++    UTLT_Assert(status == STATUS_OK, return STATUS_ERROR,
++                "xact commit error");
++
++    UTLT_Info("[PFCP] PFD Management Response");
++    return STATUS_OK;
++}
+diff --git a/src/n4/n4_pfcp_handler.h b/src/n4/n4_pfcp_handler.h
+index 78f64fb..9a5591f 100644
+--- a/src/n4/n4_pfcp_handler.h
++++ b/src/n4/n4_pfcp_handler.h
+@@ -31,6 +31,8 @@ void UpfN4HandleAssociationReleaseRequest(PfcpXact *xact, PFCPAssociationRelease
+ void UpfN4HandleHeartbeatRequest(PfcpXact *xact, HeartbeatRequest *request);
+ void UpfN4HandleHeartbeatResponse(PfcpXact *xact, HeartbeatResponse *response);
+ 
++Status UpfN4HandlePFDManagementRrequest(PfcpXact *xact, PFCPPFDManagementRequest *request);
++
+ #ifdef __cplusplus
+ }
+ #endif /* __cplusplus */

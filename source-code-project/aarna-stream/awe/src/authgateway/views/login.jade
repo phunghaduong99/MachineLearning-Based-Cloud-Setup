@@ -1,0 +1,51 @@
+doctype html
+html(lang='en')
+    head
+        link(rel='icon' type="image/x-icon" href='/images/favicon.ico')
+    body
+        meta(charset='utf-8')
+        meta(name='viewport' content='width=device-width, initial-scale=1')
+        link(rel='stylesheet' href='/stylesheets/style.css')
+        link(href='https://cdn.jsdelivr.net/npm/bootstrap@5.1.0/dist/css/bootstrap.min.css' rel='stylesheet' integrity='sha384-KyZXEAg3QhqLMpG8r+8fhAXLRk2vvoC2f3B09zVXn8CA5QIVfZOJ3BCsw2P0p/We' crossorigin='anonymous')
+        link(rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css")
+        link(href='https://fonts.googleapis.com/css?family=Allerta' rel='stylesheet')
+
+        title Login
+
+            //- .shadow-lg.p-3.mb-5.bg-white
+        #signin-container.container.text-center.mt-5
+            #amcop_logo.jumbotron.text-center.mb-5
+                img(src='/images/amcop_logo.png' alt='amcop_logo')
+            div.shadow-lg.p-3.mb-5.bg-white.paper
+                form(action='/auth/amcop' method='post')
+                    h1.d-inline-flex.mb-4.text-black-50 &nbsp;&nbsp;Log In&nbsp;&nbsp;
+                    if auth_error === true
+                        .alert.alert-danger.alert-dismissable.w-75.d-inline-flex
+                            |  #{auth_error_message}
+                    br
+                    .form-group.d-inline-flex.w-75.mb-4
+                        .input-group
+                            .input-group-prepend
+                                span.input-group-text
+                                    i.fa.fa-envelope
+                            input.form-control(type='email' name='email' placeholder='Email' required='required' value=email)
+                    br
+                    .form-group.d-inline-flex.w-75.mb-4
+                        .input-group
+                            .input-group-prepend
+                                span.input-group-text
+                                    i.fa.fa-key
+                            input.form-control(type='password' minlength="3" name='password' placeholder='Password' required='required' value=password)
+                    .form-group
+                        button.btn.btn-primary.btn-block.mb-4.w-75(type='submit')
+                            | Log In
+//-                 h4.d-inline-flex.w-50.mb-4.text-black-50 &nbsp;&nbsp;OR&nbsp;&nbsp;
+//-                 br
+//-                 a.button.button--social-login.button--microsoft.w-75(href='/auth/microsoft')
+//-                     i.icon.fa.fa-windows
+//-                     | Login With Microsoft
+//-                 br
+//-                 a.button.button--social-login.button--google.w-75(href='/auth/google')
+//-                     i.icon.fa.fa-google
+//-                     | Login With Google&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+        

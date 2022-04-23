@@ -1,0 +1,1 @@
+{"name":"free5gc-lc","description":"","spec":{"clusterproviders":[{"metadata":{"name":"free5gc-cp","description":"","UserData1":"","UserData2":""},"spec":{"clusters":[{"metadata":{"name":"clu-43","description":"","UserData1":"","UserData2":""}}]}}]}}

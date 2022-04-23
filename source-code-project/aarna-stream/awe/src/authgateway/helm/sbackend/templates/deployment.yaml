@@ -1,0 +1,98 @@
+#=======================================================================
+# Copyright (c) 2017-2020 Aarna Networks, Inc.
+# All rights reserved.
+# ======================================================================
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#           http://www.apache.org/licenses/LICENSE-2.0
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ========================================================================  
+# sbackend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.service.name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .Values.service.label }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.service.label }}
+    spec:
+      containers:
+        - name: {{ .Values.service.name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: Always
+          #command: [ "sleep" ]
+          #args: [ "99999999" ]
+          env:
+            - name: MONGODB_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: sbackend-configmap
+                  key: mongodb_host
+            - name: CAMUNDA_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: sbackend-configmap
+                  key: camunda_host
+            - name: GOOGLE_CLIENT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: sbackend-configmap
+                  key: gclient_id
+            - name: GOOGLE_CALLBACK_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: sbackend-configmap
+                  key: google_callback_url
+            - name: MICROSOFT_GRAPH_CLIENT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: sbackend-configmap
+                  key: msclient_id
+            - name: MICROSOFT_GRAPH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: sbackend-secret
+                  key: msclient_secret
+            - name: MICROSOFT_CALLBACK_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: sbackend-configmap
+                  key: ms_callback_url
+            - name: GOOGLE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: sbackend-secret
+                  key: gclient_secret
+            - name: CAMUNDA_USER
+              valueFrom:
+                secretKeyRef:
+                  name: sbackend-secret
+                  key: camunda_user
+            - name: CAMUNDA_USER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: sbackend-secret
+                  key: camunda_user_password
+            - name: API_PROXY_TARGET
+              valueFrom:
+                configMapKeyRef:
+                  name: sbackend-configmap 
+                  key: api_proxy_target 
+            - name: UI_PROXY_TARGET
+              valueFrom:
+                configMapKeyRef:
+                  name: sbackend-configmap 
+                  key: ui_proxy_target 
+          ports:
+            - containerPort: {{ .Values.service.internalPort }}

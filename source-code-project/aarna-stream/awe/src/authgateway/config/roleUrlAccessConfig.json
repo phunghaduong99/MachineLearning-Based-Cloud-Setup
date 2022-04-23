@@ -1,0 +1,26 @@
+{
+  "admin": {
+    "allowMethods": [
+      "*"
+    ],
+    "urls": [
+      "/projects/${project}/*"
+    ]
+  },
+  "tenant": {
+    "allowMethods": [
+      "*"
+    ],
+    "urls": [
+      "/projects/${project}/*"
+    ]
+  },
+  "user": {
+    "allowMethods": [
+      "*"
+    ],
+    "urls": [
+      "/projects/${project}/*"
+    ]
+  }
+}

@@ -1,0 +1,281 @@
+.SystemTest_env_prep: &SystemTest_env_prep |
+    # set -x
+    echo $CI_RUNNER_ID
+    HOST_NAME=$(hostname)
+    apt-get install -y python3 net-tools iputils-ping python3-pip sshpass
+    python3 --version
+    pip3 --version
+    OS_TYPE=$(cat /etc/os-release | awk '/^NAME/ {print $0}' | awk 'BEGIN{ FS="="} ;{print $2}' | tr -d '"')
+    cd util-scripts
+    case $CI_RUNNER_ID in 14012615) HOST_IP=192.168.101.32 ;; 10294725) HOST_IP=192.168.101.39 ;;  10294717) HOST_IP=192.168.101.50 ;; *) echo "This runner is not listed"; exit 1 ;; esac
+    # HOST_IP="192.168.101.39"
+    # HOST_IP="192.168.101.50"
+    echo $HOST_IP
+    cd ..
+    git checkout $CI_COMMIT_REF_NAME
+    git pull
+    # git checkout master
+    # git pull
+    git status
+    jq -r --arg HOST_IP "$HOST_IP" '(.servers[] | select(.server_name=="amcop-vm-01").ip_address) = $HOST_IP' amcop_deploy/ansible/deployment/config/deployment.json | sponge amcop_deploy/ansible/deployment/config/deployment.json
+    echo -e "[deployment_host]\n$HOST_IP ansible_user=${VM_PASSWORD} ansible_password=${VM_USER} ansible_ssh_extra_args='-o StrictHostKeyChecking=no'" > amcop_deploy/ansible/deployment/inventory.ini
+    cd amcop_deploy/ansible/deployment/
+    echo $USER_BRANCH
+    if  [[ $USER_BRANCH != "master" ]]; then 
+        sed -i "s/git_repo_branch: \"master\"/git_repo_branch: \"$USER_BRANCH\"/g" playbooks/vars/vars.yml
+    fi
+
+.SystemTest_amcop_cleanup: &SystemTest_amcop_cleanup |
+    echo -e "[deployment_host]\n$HOST_IP ansible_user=${VM_PASSWORD} ansible_password=${VM_USER} ansible_ssh_extra_args='-o StrictHostKeyChecking=no'" > $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/inventory.ini
+    ansible-playbook -vvv -i $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/inventory.ini $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/amcop_cleanup.yml -e deployment_env=on-prem -e server_name=${HOST_NAME} -e jump_host_user=${VM_USER} -e vm_user=${VM_USER} --skip-tags vm  || true
+
+    ansible all -i $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/inventory.ini -m shell -a "rm -rf /home/${VM_USER}/aarna-stream && rm -rf /home/${VM_USER}/cds-results* && rm -rf /home/${VM_USER}/infra-results* && rm -rf /home/${VM_USER}/ui-test-results && rm -rf /home/${VM_USER}/ui-test-results.zip && rm -rf /home/${VM_USER}/smo-test-results.zip && rm -rf /home/${VM_USER}/smo-test-results && rm -rf /opt/amcop/pvc-*" --become || true
+    # ansible all -i $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/inventory.ini -m shell -a "docker rmi -f $(docker images -aq)" --become || true
+    # sudo docker rmi -f $(sudo docker images -aq)
+.SystemTest_prep_baremetal: &SystemTest_prep_baremetal |
+    echo "running prep_baremetal_ubuntu.sh"
+    ansible all -i inventory.ini -m shell -a "mkdir -p /home/${VM_USER}/amcop; cd /home/${VM_USER}/amcop; git clone https://$GIT_USER:$GIT_PASSWORD@gitlab.com/aarna-networks/aarna-stream.git; ls -ltr aarna-stream;"
+    ansible all -i inventory.ini -m shell -a "cd /home/${VM_USER}/amcop/aarna-stream; cd util-scripts; ./prep_baremetal_ubuntu.sh >> prep.log"
+    ansible all -i inventory.ini -m shell -a "rm -rf /home/${VM_USER}/amcop"
+
+.SystemTest_amcop_deployment: &SystemTest_amcop_deployment |
+    ansible-playbook -v -i inventory.ini main.yml -e deployment_env=on-prem  -e server_name=${HOST_NAME}  -e jump_host_user=${VM_USER} -e vm_user=${VM_USER} --skip-tags vm
+
+.SystemTest_testing_prep: &SystemTest_testing_prep |
+
+    sleep 720    
+
+    # cat inventory.ini
+    echo " Images and tags being used for AMCOP deployment are:"
+    ansible all -i inventory.ini -m shell -a "for i in $\(kubectl get pods -n amcop-system \| grep -v NAME \| awk '{print $1}'\); do kubectl describe pods -n amcop-system $i | grep 'Image:' | grep 'amcop'; done"
+
+    ansible all -i inventory.ini -m shell -a "mkdir -p /home/${VM_USER}/amcop-cds; cd /home/${VM_USER}/amcop-cds; git clone https://$GIT_USER:$GIT_PASSWORD@gitlab.com/aarna-networks/aarna-stream.git; ls -ltr aarna-stream;"
+    
+    ansible all -i inventory.ini -m shell -a "export KUBECONFIG=/home/${VM_USER}/.kube/config; cd /home/${VM_USER}/amcop-cds/aarna-stream; cd util-scripts; docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY; ./cds_ip_update.sh; rm -rf /home/${VM_USER}/amcop-cds" --become || true
+
+.SystemTest_testing: &SystemTest_testing |
+    
+
+    ANSIBLE_INFRA_OUT=$(ansible all -i inventory.ini -m shell -a "docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY; docker run -v /home/${VM_USER}/.kube/config:/root/.kube/config -v /home/${VM_USER}/infra-results:/var/lib/xtesting/results registry.gitlab.com/pavansamudrala/xtesting/infra-healthcheck:infra-healthcheck-master" --become || true)
+
+    ANSIBLE_CDS_OUT=$(ansible all -i inventory.ini -m shell -a "docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY; docker run --entrypoint "./cmd.sh" -v /home/${VM_USER}/.kube/config:/root/.kube/config -v /home/${VM_USER}/cds-results:/var/lib/xtesting/results registry.gitlab.com/pavansamudrala/xtesting/cds-healthcheck:cds-healthcheck-master-updated" --become || true)
+    MESSAGE="The tests are successfull"
+    echo "Ansible_infra_out = $ANSIBLE_INFRA_OUT"
+    echo "Ansible_cds_out = $ANSIBLE_CDS_OUT"
+
+    RET_CODE_INFRA=$(echo $ANSIBLE_INFRA_OUT |  grep rc | awk 'BEGIN{FS="=| >>";} {print $2}')
+    RET_CODE_CDS=$(echo $ANSIBLE_CDS_OUT |  grep rc | awk 'BEGIN{FS="=| >>";} {print $2}')
+
+    echo "RET_CODE_CDS = $RET_CODE_CDS" 
+    if [[ "$RET_CODE_CDS" != "0" ]]; then
+        MESSAGE="The CDS test cases failed"
+    fi
+    echo "RET_CODE_INFRA = $RET_CODE_INFRA"
+    if [[ "$RET_CODE_INFRA" != "0" ]]; then
+        MESSAGE="The INFRA test cases failed"
+    fi
+    if [ "$RET_CODE_INFRA" != "0" ] &&  [ "$RET_CODE_CDS" != "0" ]; then
+        MESSAGE="Both CDS and INFRA tests failed"
+    fi
+.SystemTest_cni_deploy: &SystemTest_cni_deploy |
+
+    CNI_OUT=$(ansible all -i $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/inventory.ini -m shell -a "git clone https://github.com/opnfv/ovn4nfv-k8s-plugin.git && cd ovn4nfv-k8s-plugin && kubectl apply -f deploy/ovn-daemonset.yaml && sleep 10 && kubectl apply -f deploy/ovn4nfv-k8s-plugin.yaml" || true)
+    RET_CODE_CNI=$(echo $CNI_OUT |  grep rc | awk 'BEGIN{FS="=| >>";} {print $2}')
+    echo "RET_CODE_CNI = $RET_CODE_CNI"
+
+.SystemTest_ui_testing: &SystemTest_ui_testing |
+    echo "Starting AMCOP UI Automated Tests"
+    ansible all -i $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/inventory.ini -m shell -a "docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY && docker pull registry.gitlab.com/aarna-networks/amcop-ui-test-automation:latest && docker run -it --network host -e "CYPRESS_AMCOP_URL=http://${HOST_IP}:30480" -e "TEST_SPEC=run-all" -e "CYPRESS_BASE_URL=http://${HOST_IP}:30480" registry.gitlab.com/aarna-networks/amcop-ui-test-automation:latest" --become || true
+
+    C_NAME=$(ansible all -i $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/inventory.ini -m shell -a "docker ps -f 'status=exited' |  grep -i 'test-automation' | head -1 " --become | awk '/test-automation/ {print $NF}')
+
+    ansible all -i $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/inventory.ini -m shell -a "mkdir ui-test-results/ && docker container cp ${C_NAME}:/cypress/reports ./ui-test-results/ && sudo docker container cp ${C_NAME}:/cypress/screenshots ./ui-test-results/" --become
+
+.SMO_testing: &SMO_testing |
+    echo "Starting AMCOP SMO Tests"
+    RET_SMO_RUN=$(ansible all -i $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/inventory.ini -m shell -a "docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY && docker pull registry.gitlab.com/aarna-networks/smo-test-automation:latest && docker run --network=host --privileged -it -e "HOST_IP=${HOST_IP}" -e "PORT=30181" registry.gitlab.com/aarna-networks/smo-test-automation:latest" --become || true)
+    echo "RET_SMO_RUN = $RET_SMO_RUN"
+    echo "Checking smo container"
+    RET_SMO_C=$(ansible all -i $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/inventory.ini -m shell -a "sudo docker ps -f 'status=exited' |  grep -i 'smo-test-automation' | head -1 " --become | awk '/smo-test-automation/ {print $NF}')
+    echo "RET_SMO_C = $RET_SMO_C"
+    echo "Creating smo results dir"
+    ansible all -i $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/inventory.ini -m shell -a "mkdir smo-test-results/ && sudo docker container cp ${RET_SMO_C}:testrun.html ./smo-test-results/" --become
+
+.SystemTest_free5gc_Orchestrate: &SystemTest_free5gc_Orchestrate |
+    echo "Starting Free5gc orchestratation..."
+    # pwd
+    # git checkout .
+    # git status
+    # git checkout $CI_COMMIT_REF_NAME
+    echo $HOST_IP
+    AMCOP_E2E_IP=$HOST_IP
+    echo "AMCOP_E2E_IP = $AMCOP_E2E_IP"
+    middleend_port="30481"
+    orch_port="30415"
+    clm_port="30461"
+    dcm_port="30477"
+
+    ansible all -B 600 -P 15 -i $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/inventory.ini -m shell -a "cd /home/${VM_USER}/aarna-stream/util-scripts && bash -x free5g_install_prereq.sh ens3" 
+
+    ansible all -B 120 -P 15 -i $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/inventory.ini -m shell -a "cp /home/${VM_USER}/.kube/config /home/${VM_USER}/aarna-stream/amcop_deploy/gitlab-ci/config_ci"
+
+    F5GC_OUT=$(ansible all -B 180 -P 15 -i $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/inventory.ini -m shell -a "cd /home/${VM_USER}/aarna-stream/amcop_deploy/gitlab-ci && python free5gc_orchestrate_python.py $AMCOP_E2E_IP ${middleend_port} ${orch_port} ${clm_port} ${dcm_port}" || true)
+    
+    # echo $F5GC_OUT
+    echo "$F5GC_OUT" > F5GC_OUT.txt
+    sleep 1
+    cat F5GC_OUT.txt
+    RET_CODE_F5GC=$(cat F5GC_OUT.txt | grep \"rc\" | awk -F ':' '{print $2}' | tr -d ',' | tr -d ' ' || true)
+    echo "The return code from first command is $RET_CODE_F5GC"
+    if [[ $RET_CODE_F5GC == '' ]]; then
+        RET_CODE_F5GC=$(cat F5GC_OUT.txt | grep rc | awk -F = '{print $2}' | awk -F ">>" '{print $1}' | tr -d ' ' || true)
+    fi
+    echo "RET_CODE_F5GC = $RET_CODE_F5GC"
+    if [[ "$RET_CODE_F5GC" != "0" ]]; then 
+        MESSAGE="Either CDS or Infra or vFW or free5gc tests are not successful. Target kud server used for vFW orchestration is 192.168.102.46. The Gitlab runner for $HOST_IP  is paused for further debugging. For futher details, refer this url for Job logs- $CI_JOB_URL"
+    fi
+
+.SystemTest_vFW_Orchestrate: &SystemTest_vFW_Orchestrate |
+    echo "Starting vFW orchestratation..."
+    # pwd
+    # git checkout .
+    # git status
+    # git checkout $CI_COMMIT_REF_NAME
+
+    echo -e "[deployment_host]\n$HOST_IP ansible_user=${VM_PASSWORD} ansible_password=${VM_USER} ansible_ssh_extra_args='-o StrictHostKeyChecking=no'" > $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/inventory.ini
+
+    echo "CI_PROJECT_DIR = $CI_PROJECT_DIR"
+    ansible all -i $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/inventory.ini -m shell -a "cp -f ~/aarna-stream/cnf/vfw_helm/sink.tgz /home/${VM_USER} && cp -f ~/aarna-stream/cnf/vfw_helm/packetgen.tgz /home/${VM_USER} && cp -f ~/aarna-stream/cnf/vfw_helm/firewall.tgz /home/${VM_USER} && cp -f ~/aarna-stream/cnf/payload/profile.tar.gz /home/${VM_USER} && cp -f ~/aarna-stream/amcop_deploy/gitlab-ci/46_config /home/${VM_USER}/k8_config"
+
+    echo $HOST_IP
+    AMCOP_E2E_IP=$HOST_IP
+    echo "AMCOP_E2E_IP = $AMCOP_E2E_IP"
+    middleend_port="30481"
+    orch_port="30415"
+    clm_port="30461"
+    dcm_port="30477"
+
+    ansible all -B 120 -P 15 -i $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/inventory.ini -m shell -a "cd ~/aarna-stream/amcop_deploy/gitlab-ci/ && git checkout amcop-gitlabci-pavan && git pull" || true
+
+    VFW_OUT=$(ansible all -B 180 -P 15 -i $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/inventory.ini -m shell -a "cd ~/aarna-stream/amcop_deploy/gitlab-ci/ && python vfw_orchestrate_python.py ${AMCOP_E2E_IP} ${middleend_port} ${orch_port} ${clm_port} ${dcm_port}" || true)
+    # echo $VFW_OUT
+    echo "$VFW_OUT" > VFW_OUT.txt
+    cat VFW_OUT.txt
+    RET_CODE_VFW=$(cat VFW_OUT.txt | grep \"rc\" | awk -F ':' '{print $2}' | tr -d ',' | tr -d ' ' || true)
+    if [[ $RET_CODE_VFW == '' ]]; then
+        RET_CODE_VFW=$(cat VFW_OUT.txt | grep rc | awk -F = '{print $2}' | awk -F ">>" '{print $1}' | tr -d ' ' | tr -d "'" || ture)
+    fi
+    echo "RET_CODE_VFW = $RET_CODE_VFW"
+    if [[ "$RET_CODE_VFW" != "0" ]]; then 
+        MESSAGE="Either CDS or Infra or vFW or free5gc tests are not successful. Target kud server used for vFW orchestration is 192.168.102.46. The Gitlab runner for $HOST_IP  is paused for further debugging. For futher details, refer this url for Job logs- $CI_JOB_URL"
+    fi
+
+.SystemTest_vfw_validation: &SystemTest_vfw_validation |
+    export ANSIBLE_HOST_KEY_CHECKING=False
+    VFW_VALIDATE_OUT=$(ansible all -i 192.168.102.46, -m shell -a "kubectl get pods -A" --extra-vars "ansible_user=ubuntu ansible_password=ubuntu" | grep v1 | awk '{print $4}' | uniq)
+    echo "VFW_VALIDATE_OUT = $VFW_VALIDATE_OUT"
+    if [[ "$VFW_VALIDATE_OUT" != "Running" ]]; then 
+        RET_CODE_VFW_VALIDATE='255'
+        MESSAGE="Either CDS or Infra or vFW or free5gc tests are not successful. Target kud server used for vFW orchestration is 192.168.102.46. The Gitlab runner for $HOST_IP  is paused for further debugging."
+    else 
+        RET_CODE_VFW_VALIDATE='0'
+    fi
+    echo "RET_CODE_VFW_VALIDATE = $RET_CODE_VFW_VALIDATE"
+.SystemTest_email: &SystemTest_email |
+    pip3 install yagmail
+    cat $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/inventory.ini
+
+    cd $CI_PROJECT_DIR
+    cd amcop_deploy/gitlab-ci/
+    SUBJECT="AMCOP system test pipeline for master branch"
+    RECIPIENT_EMAIL_ID="aarna-dev@aarnanetworks.com"
+    # RECIPIENT_EMAIL_ID="system-test@aarnanetworks.com"
+
+    if  [[ $USER_BRANCH != "master" ]]; then
+        SUBJECT="AMCOP system test pipeline for $USER_BRANCH branch"
+        RECIPIENT_EMAIL_ID="system-test@aarnanetworks.com"
+        python3 send_email.py --reciever_email $RECIPIENT_EMAIL_ID  --subject "$SUBJECT" --email_body "$MESSAGE, please find the attahced logs if needed." --attachments "$CI_PROJECT_DIR/infra-results.zip, $CI_PROJECT_DIR/cds-results.zip, $CI_PROJECT_DIR/smo-test-results.zip" --sender_password $GITLAB_EMAIL_SENDER_PASSWORD
+    else
+        python3 send_email.py --reciever_email $RECIPIENT_EMAIL_ID --subject "$SUBJECT" --email_body "$MESSAGE. For test results, check this page - https://aarna-networks.gitlab.io/aarna-stream/. Note- Results are being uploaded, please give upto five minutes for the test result to load." --sender_password $GITLAB_EMAIL_SENDER_PASSWORD 
+    fi
+
+.SystemTest_results_page: &SystemTest_results_page |
+
+    ansible all -i $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/inventory.ini -m shell -a "zip -r cds-results.zip cds-results/ && zip -r infra-results.zip infra-results/ && zip -r ui-test-results.zip ui-test-results/ && zip -r smo-test-results.zip smo-test-results/ " --become
+    ansible all -i  $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/inventory.ini -m fetch -a "src=/home/${VM_USER}/cds-results.zip dest=$CI_PROJECT_DIR/ flat=yes" --become
+
+    ansible all -i  $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/inventory.ini -m fetch -a "src=/home/${VM_USER}/ui-test-results.zip dest=$CI_PROJECT_DIR/ flat=yes" --become
+    
+    ansible all -i  $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/inventory.ini -m fetch -a "src=/home/${VM_USER}/smo-test-results.zip dest=$CI_PROJECT_DIR/ flat=yes" --become
+    
+    ansible all -i  $CI_PROJECT_DIR/amcop_deploy/ansible/deployment/inventory.ini -m fetch -a "src=/home/${VM_USER}/infra-results.zip dest=$CI_PROJECT_DIR/ flat=yes" --become
+
+    if  [[ $USER_BRANCH == "master" ]]; then
+        apt update
+        apt-get install -y unzip zip
+
+        DATE=$(date +"%d-%b-%Y")
+        TIMESTAMP=$(date +"%H-%M-%S")
+        mkdir -p $CI_PROJECT_DIR/public/daily/$DATE
+
+        cp $CI_PROJECT_DIR/cds-results.zip $CI_PROJECT_DIR/cds-results-$TIMESTAMP.zip
+        cp $CI_PROJECT_DIR/infra-results.zip $CI_PROJECT_DIR/infra-results-$TIMESTAMP.zip
+        cp $CI_PROJECT_DIR/ui-test-results.zip $CI_PROJECT_DIR/ui-test-results-$TIMESTAMP.zip
+        cp $CI_PROJECT_DIR/smo-test-results.zip $CI_PROJECT_DIR/smo-test-results-$TIMESTAMP.zip
+
+        cp $CI_PROJECT_DIR/cds-results-$TIMESTAMP.zip $CI_PROJECT_DIR/public/daily/$DATE/
+        cp $CI_PROJECT_DIR/infra-results-$TIMESTAMP.zip $CI_PROJECT_DIR/public/daily/$DATE/
+        cp $CI_PROJECT_DIR/ui-test-results-$TIMESTAMP.zip $CI_PROJECT_DIR/public/daily/$DATE/
+        cp $CI_PROJECT_DIR/smo-test-results-$TIMESTAMP.zip $CI_PROJECT_DIR/public/daily/$DATE/
+
+        unzip -q -d $CI_PROJECT_DIR/public/daily/$DATE/cds-results-$TIMESTAMP $CI_PROJECT_DIR/public/daily/$DATE/cds-results-$TIMESTAMP.zip
+        unzip -q -d $CI_PROJECT_DIR/public/daily/$DATE/infra-results-$TIMESTAMP $CI_PROJECT_DIR/public/daily/$DATE/infra-results-$TIMESTAMP.zip
+        unzip -q -d $CI_PROJECT_DIR/public/daily/$DATE/ui-test-results-$TIMESTAMP $CI_PROJECT_DIR/public/daily/$DATE/ui-test-results-$TIMESTAMP.zip
+        unzip -q -d $CI_PROJECT_DIR/public/daily/$DATE/smo-test-results-$TIMESTAMP $CI_PROJECT_DIR/public/daily/$DATE/smo-test-results-$TIMESTAMP.zip
+
+        rm -rf $CI_PROJECT_DIR/public/daily/$DATE/cds-results-$TIMESTAMP.zip $CI_PROJECT_DIR/public/daily/$DATE/infra-results-$TIMESTAMP.zip $CI_PROJECT_DIR/public/daily/$DATE/ui-test-results-$TIMESTAMP.zip $CI_PROJECT_DIR/public/daily/$DATE/smo-test-results-$TIMESTAMP.zip
+        ls -ltr $CI_PROJECT_DIR/public/daily/$DATE/
+    fi
+
+.SystemTest_pause_runner_on_failure: &SystemTest_pause_runner_on_failure |
+    echo "RET_CODE_CDS = $RET_CODE_CDS" 
+    echo "RET_CODE_INFRA = $RET_CODE_INFRA"
+    echo "RET_CODE_VFW = $RET_CODE_VFW"
+    echo "RET_CODE_F5GC = $RET_CODE_F5GC"
+    echo "RET_SMO_RUN = $RET_SMO_RUN"
+    
+    # echo "RET_CODE_VFW_VALIDATE = $RET_CODE_VFW_VALIDATE"
+    
+    #if [ "$RET_CODE_CDS" == '255' ] || [ "$RET_CODE_INFRA" == '255' ] || [ "$RET_CODE_CNI == '255" ] || [ "$RET_CODE_VFW" == '255' ] || [ "$RET_CODE_VFW_VALIDATE" == '255' ]; then
+    if [ "$RET_CODE_CDS" != '0' ] || [ "$RET_CODE_INFRA" != '0' ] || [ "$RET_CODE_VFW" != '0' ] || [ "$RET_CODE_F5GC" != '0' ] || [ "$RET_SMO_RUN" != '0' ] ; then
+    # if [ "$RET_CODE_CDS" != '0' ] || [ "$RET_CODE_INFRA" != '0' ] || [ "$RET_CODE_VFW" != '0' ] ; then
+        echo "Tests failed, pausing the runner for debugging"
+        set -x
+        curl --request PUT --header "PRIVATE-TOKEN: $FULL_ACCESS_USER_TOKEN" --form "active=false"  "$CI_API_V4_URL/runners/$CI_RUNNER_ID"
+    fi
+
+.SystemTest_pipeline:
+    stage: build
+    tags:
+        - ci-server
+    before_script:
+        - echo "Current working directory $(pwd) and docker registry $CI_REGISTRY"
+    script:
+        - *SystemTest_env_prep
+        - *SystemTest_prep_baremetal
+        - *SystemTest_amcop_cleanup
+        - *SystemTest_amcop_deployment
+        - *SystemTest_testing_prep
+        - *SystemTest_testing
+        - *SystemTest_ui_testing
+        - *SMO_testing
+        - *SystemTest_free5gc_Orchestrate
+        # - *SystemTest_cni_deploy
+        - *SystemTest_vFW_Orchestrate
+        # - *SystemTest_vfw_validation
+        - *SystemTest_results_page
+        - *SystemTest_email
+        - *SystemTest_pause_runner_on_failure
+    artifacts:
+        paths:
+            - $CI_PROJECT_DIR/public/

@@ -1,0 +1,1 @@
+{"metadata":{"name":"protected-private-net","description":""},"spec":{"cniType":"ovn4nfv","ipv4Subnets":[{"subnet":"192.168.20.0/24","name":"subnet1","gateway":"192.168.20.100/32"}]}}
